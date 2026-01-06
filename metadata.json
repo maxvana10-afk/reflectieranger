@@ -1,0 +1,8 @@
+{
+  "name": "Reflectie-Ranger",
+  "description": "Een interactief reflectieplatform voor het basisonderwijs waar leerlingen met hulp van AI kunnen reflecteren op lesdoelen voor wereldoriëntatie vakken.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
