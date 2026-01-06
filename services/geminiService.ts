@@ -1,37 +1,78 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { Subject } from "../types";
 
 export interface MasteryLevelGuidance {
   level: number;
-  guidance: string; // De uitleg voor het ECHTE doel
-  example: string;  // Het voorbeeld van het ANDERE doel
+  guidance: string; 
+  example: string;  
 }
 
 export interface MasteryGuidanceResponse {
-  referenceGoal: string; // De naam van het doel dat als voorbeeld wordt gebruikt
+  referenceGoal: string; 
   levels: MasteryLevelGuidance[];
 }
 
-const getLocalFeedback = (draft: string): string => {
-  const text = draft.toLowerCase();
-  const hasExample = text.includes('bijvoorbeeld') || text.includes('zoals') || text.includes('bijv') || text.includes('voorbeeld');
-  const hasEvidence = text.includes('ik kan') || text.includes('ik weet') || text.includes('snap') || text.includes('begrijp') || text.includes('bewijs');
-  const isShort = draft.length < 40;
+/**
+ * Uitgebreide offline feedback logica (De "Offline Ranger").
+ * Geeft specifieke tips op basis van tekstlengte, structuur en trefwoorden.
+ */
+const getLocalFeedback = (draft: string, subject: Subject): string => {
+  const text = draft.trim().toLowerCase();
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
+  
+  const checks = {
+    explanation: ['omdat', 'want', 'daarom', 'reden', 'waardoor', 'gevolg'],
+    process: ['eerst', 'toen', 'daarna', 'stap', 'begon', 'eindigde'],
+    content: ['geleerd', 'begrijp', 'snap', 'moeilijk', 'makkelijk', 'vond', 'ontdekt'],
+    evidence: ['bijvoorbeeld', 'zoals', 'bijv', 'voorbeeld', 'gezien', 'gedaan'],
+    subjectSpecific: {
+      [Subject.Geography]: ['kaart', 'land', 'klimaat', 'natuur', 'rivier', 'stad', 'wereld'],
+      [Subject.History]: ['vroeger', 'tijd', 'eeuw', 'jaartal', 'oorlog', 'koning', 'ridders'],
+      [Subject.Science]: ['proefje', 'onderzoek', 'waarneming', 'test', 'machine', 'natuur'],
+    }
+  };
 
-  if (isShort) {
-    return "Je bent goed op weg! Probeer eens wat meer te vertellen over wat je precies hebt gedaan tijdens de les.";
+  const hasExplanation = checks.explanation.some(w => text.includes(w));
+  const hasProcess = checks.process.some(w => text.includes(w));
+  const hasContent = checks.content.some(w => text.includes(w));
+  const hasEvidence = checks.evidence.some(w => text.includes(w));
+  
+  const subjectWords = (checks.subjectSpecific as any)[subject] || [];
+  const hasSubjectWords = subjectWords.length > 0 ? subjectWords.some((w: string) => text.includes(w)) : true;
+
+  if (wordCount < 6) {
+    return "Dat is een kort maar krachtig begin! Kun je iets meer vertellen over wat je precies hebt gedaan tijdens de les?";
   }
-  if (!hasExample && !hasEvidence) {
-    return "Goed geschreven! Kun je ook een voorbeeld geven van wat je hebt geleerd? En hoe laat je zien dat je het doel hebt behaald?";
+
+  if (!hasExplanation && wordCount < 25) {
+    return "Mooi! Gebruik eens woorden als 'omdat' of 'want' om uit te leggen *waarom* je dit nu beter begrijpt.";
   }
-  return "Wauw, wat een complete reflectie! Je geeft goede voorbeelden en laat echt zien wat je hebt geleerd. Super gedaan!";
+
+  if (!hasEvidence) {
+    return "Je bent goed op weg. Kun je een concreet voorbeeld geven van iets dat je hebt gezien of gedaan in de les?";
+  }
+
+  if (!hasSubjectWords && wordCount > 15) {
+    return `Je schrijft al veel, goed zo! Kun je ook wat woorden uit de les over ${subject} gebruiken in je tekst?`;
+  }
+
+  if (!hasProcess && wordCount < 30) {
+    return "Goede uitleg! Vertel ook eens hoe je het hebt aangepakt. Wat deed je als eerste?";
+  }
+
+  if (!hasContent) {
+    return "Ik zie wat je hebt gedaan, maar wat *vond* je ervan? Was het moeilijk of juist makkelijk voor je?";
+  }
+  
+  if (wordCount >= 30 && hasExplanation && hasEvidence) {
+    return "Wauw, Meester-Ranger! Je geeft uitleg, voorbeelden en gebruikt veel woorden. Dit is een super sterke reflectie!";
+  }
+
+  return "Je reflectie ziet er goed uit. Heb je alles verteld wat je wilde vertellen, of schiet je nog iets te binnen?";
 };
 
-/**
- * Genereert uitleg voor het huidige doel, maar illustreert de niveaus met voorbeelden van een ANDER doel.
- * Dit voorkomt dat kinderen de tekst letterlijk overnemen.
- */
 export const getMasteryGuidance = async (
   goalTitle: string,
   goalDescription: string
@@ -48,33 +89,43 @@ export const getMasteryGuidance = async (
 
   if (typeof navigator !== 'undefined' && !navigator.onLine) return defaultResponse;
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `
     HET ECHTE DOEL: "${goalTitle}: ${goalDescription}"
+    TAAK: Bedenk een totaal ANDER lesdoel als voorbeeld (bijv. "Een taart bakken"). 
+    Schrijf voor 4 niveaus:
+    1. Een korte uitleg ('Ik-kan'-zin) die past bij HET ECHTE DOEL.
+    2. Een voorbeeld-reflectie die past bij HET REFERENTIEDOEL.
     
-    TAAK:
-    1. Bedenk een totaal ANDER lesdoel of een vaardigheid (bijv. "Leren zwemmen", "De Romeinen", "Een taart bakken"). Dit noemen we het REFERENTIEDOEL.
-    2. Voor de 4 beheersingsniveaus schrijf je:
-       - Een korte uitleg ('Ik-kan'-zin) die past bij HET ECHTE DOEL.
-       - Een voorbeeld-reflectie die past bij HET REFERENTIEDOEL.
-    
-    WAAROM? Kinderen mogen de tekst niet kunnen overtypen. Ze moeten de 'kwaliteit' van het voorbeeld zien op een ander onderwerp.
-    
-    ANTWOORD IN DIT JSON FORMAT:
-    {
-      "referenceGoal": "Naam van het referentiedoel",
-      "levels": [
-        {"level": 1, "guidance": "Uitleg voor ECHTE doel", "example": "Voorbeeld voor REFERENTIEDOEL"},
-        ... (voor 4 niveaus)
-      ]
-    }
+    ANTWOORD IN JSON.
   `;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
-      config: { responseMimeType: "application/json" }
+      config: { 
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            referenceGoal: { type: Type.STRING },
+            levels: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  level: { type: Type.NUMBER },
+                  guidance: { type: Type.STRING },
+                  example: { type: Type.STRING },
+                },
+                required: ["level", "guidance", "example"]
+              },
+            },
+          },
+          required: ["referenceGoal", "levels"]
+        }
+      }
     });
     const parsed = JSON.parse(response.text || '{}');
     return parsed.referenceGoal ? parsed : defaultResponse;
@@ -88,14 +139,24 @@ export const getAIFeedback = async (
   goalTitle: string,
   goalDescription: string,
   currentDraft: string
-): Promise<string> => {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return getLocalFeedback(currentDraft);
+): Promise<{ text: string; isOffline: boolean }> => {
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  
+  if (isOffline) {
+    return { text: getLocalFeedback(currentDraft, subject), isOffline: true };
+  }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `
-    Je bent 'Reflectie-Ranger'. Help een kind (8-12j) hun reflectie op "${goalTitle}" te verbeteren.
-    Huidige tekst: "${currentDraft}"
-    Geef korte (max 3 zinnen), positieve feedback in het Nederlands. Focus op het toevoegen van voorbeelden en bewijs.
+    Rol: Reflectie-Ranger, een bemoedigende coach voor kinderen (8-12 jaar).
+    Vak: ${subject}
+    Lesdoel: "${goalTitle}" (${goalDescription})
+    Tekst van kind: "${currentDraft}"
+    
+    Opdracht: Geef korte (max 3 zinnen), positieve feedback in het Nederlands. 
+    - Noem een specifiek sterk punt uit de tekst van het kind.
+    - Stel één concrete vraag om meer detail of bewijs toe te voegen (bijv: "Hoe zag dat eruit?", "Wat was het belangrijkste dat je ontdekte?").
+    - Houd het taalgebruik simpel en enthousiast.
   `;
 
   try {
@@ -103,8 +164,8 @@ export const getAIFeedback = async (
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
-    return response.text || getLocalFeedback(currentDraft);
+    return { text: response.text || getLocalFeedback(currentDraft, subject), isOffline: false };
   } catch (error) {
-    return getLocalFeedback(currentDraft);
+    return { text: getLocalFeedback(currentDraft, subject), isOffline: true };
   }
 };

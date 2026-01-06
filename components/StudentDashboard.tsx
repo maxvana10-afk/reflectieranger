@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { LearningGoal, Subject, User } from '../types';
 import { SUBJECT_COLORS, SUBJECT_ICONS } from '../constants';
 import { ReflectionEntryList, MASTERY_INFO } from './ReflectionEntryList';
-import { getAIFeedback, getMasteryGuidance, MasteryLevelGuidance, MasteryGuidanceResponse } from '../services/geminiService';
+import { getAIFeedback, getMasteryGuidance, MasteryGuidanceResponse } from '../services/geminiService';
 
 interface Props {
   currentUser: User;
@@ -17,16 +17,16 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
   const [draft, setDraft] = useState('');
   const [masteryLevel, setMasteryLevel] = useState<number>(3);
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{ text: string; isOffline: boolean } | null>(null);
   const [masteryData, setMasteryData] = useState<MasteryGuidanceResponse | null>(null);
-  const [showCheatSheet, setShowCheatSheet] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (selectedGoal) {
       setMasteryData(null);
-      setAiSuggestion(null);
+      setFeedback(null);
       getMasteryGuidance(selectedGoal.title, selectedGoal.description).then(setMasteryData);
     }
   }, [selectedGoal]);
@@ -34,13 +34,13 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
   const handleGetHelp = async () => {
     if (!selectedGoal || !draft.trim()) return;
     setIsAiLoading(true);
-    const feedback = await getAIFeedback(
+    const result = await getAIFeedback(
       selectedGoal.subject,
       selectedGoal.title,
       selectedGoal.description,
       draft
     );
-    setAiSuggestion(feedback);
+    setFeedback(result);
     setIsAiLoading(false);
   };
 
@@ -53,18 +53,35 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!selectedGoal || !draft.trim()) return;
-    onAddReflection(selectedGoal.id, draft, masteryLevel, photo || undefined);
-    setDraft('');
-    setAiSuggestion(null);
-    setPhoto(null);
-    setMasteryLevel(3);
-    setShowCheatSheet(false);
+    setIsSubmitting(true);
+    try {
+      await onAddReflection(selectedGoal.id, draft, masteryLevel, photo || undefined);
+      setDraft('');
+      setFeedback(null);
+      setPhoto(null);
+      setMasteryLevel(3);
+      setSelectedGoal(null);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const getQualityScore = () => {
+    if (!draft.trim()) return 0;
+    const text = draft.toLowerCase();
+    let score = Math.min(50, draft.length / 4); 
+    if (text.includes('omdat') || text.includes('want')) score += 15;
+    if (text.includes('bijvoorbeeld') || text.includes('zoals')) score += 15;
+    if (text.includes('eerst') || text.includes('toen')) score += 10;
+    if (photo) score += 10;
+    return Math.min(100, Math.floor(score));
   };
 
   if (selectedGoal) {
     const userReflections = selectedGoal.reflections.filter(r => r.userId === currentUser.id);
+    const qualityScore = getQualityScore();
     const currentGuidance = masteryData?.levels.find(m => m.level === masteryLevel);
 
     return (
@@ -81,199 +98,236 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
           </div>
         </div>
 
-        <div className={`p-6 rounded-2xl shadow-lg mb-8 text-white ${SUBJECT_COLORS[selectedGoal.subject]}`}>
-          <div className="flex items-center gap-3 mb-2">
-             <span className="text-2xl">{SUBJECT_ICONS[selectedGoal.subject]}</span>
-             <span className="uppercase tracking-widest text-xs font-bold opacity-80">{selectedGoal.subject}</span>
+        <div className={`p-6 rounded-3xl shadow-lg mb-8 text-white relative overflow-hidden ${SUBJECT_COLORS[selectedGoal.subject]}`}>
+          <div className="absolute top-0 right-0 p-8 opacity-10 text-6xl">
+            {SUBJECT_ICONS[selectedGoal.subject]}
           </div>
-          <h2 className="text-3xl font-bold mb-2">{selectedGoal.title}</h2>
-          <p className="text-white/90 text-lg leading-snug">{selectedGoal.description}</p>
+          <div className="flex items-center gap-3 mb-2 relative z-10">
+             <span className="uppercase tracking-widest text-[10px] font-black bg-white/20 px-2 py-1 rounded">
+               {selectedGoal.subject}
+             </span>
+          </div>
+          <h2 className="text-2xl font-bold mb-2 relative z-10">{selectedGoal.title}</h2>
+          <p className="text-white/90 text-sm leading-snug relative z-10">{selectedGoal.description}</p>
         </div>
 
         <ReflectionEntryList entries={userReflections} />
 
-        <div className="bg-white p-6 rounded-2xl shadow-md border-2 border-blue-50 relative">
-          <div className="flex justify-between items-center mb-4">
-            <label className="text-slate-700 font-bold text-lg">
-              Hoe gaat het nu?
-            </label>
-            <button 
-              onClick={() => setShowCheatSheet(!showCheatSheet)}
-              className="text-xs font-bold text-blue-500 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors flex items-center gap-2"
-            >
-              <i className="fas fa-lightbulb"></i>
-              {showCheatSheet ? "Sluit hulp" : "Hoe schrijf ik dit?"}
-            </button>
+        <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-100 mb-8 relative">
+          {isSubmitting && (
+            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-30 flex flex-col items-center justify-center rounded-3xl">
+              <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="font-black text-blue-600 uppercase tracking-widest text-xs">Direct opslaan...</p>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-slate-800 font-bold text-lg">Hoe goed ging het?</h3>
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-black text-slate-400 uppercase mb-1">Kwaliteit van de Ranger</span>
+              <div className="flex items-center gap-2">
+                <div className="w-24 h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-50">
+                  <div 
+                    className={`h-full transition-all duration-700 ease-out ${
+                      qualityScore > 80 ? 'bg-emerald-500' : qualityScore > 40 ? 'bg-blue-500' : 'bg-amber-500'
+                    }`}
+                    style={{ width: `${qualityScore}%` }}
+                  ></div>
+                </div>
+                <span className="text-[10px] font-bold text-slate-500">{qualityScore}%</span>
+              </div>
+            </div>
           </div>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+
+          <div className="grid grid-cols-4 gap-2 mb-6">
             {MASTERY_INFO.map((m) => (
               <button
                 key={m.level}
                 onClick={() => setMasteryLevel(m.level)}
-                className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 text-center relative ${
+                className={`p-3 rounded-2xl border-2 transition-all flex flex-col items-center gap-1 text-center ${
                   masteryLevel === m.level 
-                    ? `${m.bg} ${m.color.replace('text-', 'border-')} ring-4 ring-offset-2 ${m.color.replace('text-', 'ring-').replace('500', '100')}` 
-                    : 'border-slate-100 text-slate-400 hover:border-slate-200'
+                    ? `${m.bg} ${m.color.replace('text-', 'border-')} scale-105 shadow-md` 
+                    : 'border-slate-50 text-slate-300 hover:border-slate-100'
                 }`}
               >
-                <i className={`${m.icon} text-2xl`}></i>
-                <span className="text-[11px] font-bold leading-tight">{m.label}</span>
+                <i className={`${m.icon} text-xl`}></i>
+                <span className="text-[9px] font-black uppercase tracking-tighter">{m.label.split(' ')[0]}</span>
               </button>
             ))}
           </div>
 
-          {showCheatSheet && masteryData && (
-            <div className="mb-8 bg-blue-50/50 rounded-2xl border-2 border-blue-100 p-5 animate-slideDown">
-              <div className="flex flex-col gap-1 mb-4">
+          {/* AI Mastery Guidance Section */}
+          <div className="mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-100 animate-fadeIn min-h-[100px] flex flex-col justify-center">
+            {currentGuidance ? (
+              <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-white text-sm">
-                    <i className="fas fa-info"></i>
-                  </div>
-                  <h4 className="text-blue-800 font-bold text-sm">Hulp bij je antwoord</h4>
+                   <div className={`w-2 h-2 rounded-full ${MASTERY_INFO[masteryLevel-1].color.replace('text-', 'bg-')}`}></div>
+                   <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                     Niveau {masteryLevel}: {currentGuidance.guidance}
+                   </p>
                 </div>
-                <p className="text-[10px] text-blue-600 font-bold bg-blue-100 px-2 py-1 rounded inline-block mt-2">
-                  LET OP: De voorbeelden gaan over "{masteryData.referenceGoal}"
-                </p>
+                <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm relative group">
+                  <span className="absolute -top-2 left-3 bg-blue-100 text-blue-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Voorbeeld</span>
+                  <p className="text-xs text-slate-600 italic leading-relaxed">
+                    "Stel het doel was <strong>'{masteryData.referenceGoal}'</strong>, dan zou je kunnen schrijven: <br/>
+                    <span className="text-slate-800 font-medium">{currentGuidance.example}</span>"
+                  </p>
+                </div>
               </div>
-              
-              <div className="space-y-4">
-                {masteryData.levels.map((m) => {
-                  const info = MASTERY_INFO.find(info => info.level === m.level)!;
-                  const isActive = m.level === masteryLevel;
-                  return (
-                    <div key={m.level} className={`p-4 rounded-xl border-2 transition-all ${isActive ? 'bg-white border-blue-300 shadow-md scale-[1.02]' : 'bg-white/40 border-slate-100 opacity-50'}`}>
-                      <div className="flex items-center gap-2 mb-2">
-                        <i className={`${info.icon} ${info.color} text-sm`}></i>
-                        <span className={`text-[10px] font-bold uppercase ${info.color}`}>{info.label}</span>
-                      </div>
-                      
-                      {/* Uitleg voor het ECHTE doel */}
-                      <p className="text-slate-800 text-xs font-bold mb-3">"{m.guidance}"</p>
-                      
-                      {/* Voorbeeld van het ANDERE doel */}
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">
-                          Voorbeeld van "{masteryData.referenceGoal}":
-                        </p>
-                        <p className="text-slate-600 text-xs italic leading-relaxed">
-                          "{m.example}"
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] text-slate-400 mt-4 text-center italic">
-                Bekijk hoe uitgebreid het voorbeeld is en doe dat ook bij jouw eigen antwoord!
-              </p>
-            </div>
-          )}
-
-          {!showCheatSheet && currentGuidance && (
-            <div className="mb-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 animate-fadeIn">
-              <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider mb-1">Jouw keuze betekent:</p>
-              <p className="text-slate-700 font-bold text-sm">"{currentGuidance.guidance}"</p>
-            </div>
-          )}
-
-          <div className="relative">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              className="w-full h-44 p-4 rounded-xl border-2 border-slate-200 focus:border-blue-400 focus:ring-0 outline-none transition-all resize-none text-slate-700 mb-4"
-              placeholder="Vertel hier wat je hebt geleerd over dit doel..."
-            />
-          </div>
-
-          <div className="mb-6">
-            <p className="text-slate-600 font-semibold mb-2 text-sm flex items-center gap-2">
-              <i className="fas fa-camera"></i> Foto van je werk (bewijs)
-            </p>
-            {!photo ? (
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 hover:border-blue-300 hover:text-blue-400 transition-all flex flex-col items-center justify-center gap-1"
-              >
-                <i className="fas fa-cloud-upload-alt text-2xl"></i>
-                <span className="text-sm font-medium">Klik om een foto te maken</span>
-              </button>
             ) : (
-              <div className="relative group inline-block">
-                <img src={photo} alt="Preview" className="w-48 h-48 object-cover rounded-xl border-2 border-blue-100 shadow-sm" />
-                <button onClick={() => setPhoto(null)} className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center shadow-md">
-                  <i className="fas fa-times"></i>
-                </button>
+              <div className="flex flex-col items-center justify-center text-slate-400 gap-2 py-4">
+                <i className="fas fa-sparkles animate-pulse"></i>
+                <span className="text-[10px] font-bold uppercase tracking-widest">Hulp wordt geladen...</span>
               </div>
             )}
-            <input type="file" ref={fileInputRef} onChange={handlePhotoUpload} accept="image/*" capture="environment" className="hidden" />
           </div>
 
-          {aiSuggestion && (
-            <div className="mt-4 p-4 bg-amber-50 rounded-xl border-l-4 border-amber-400 flex gap-3 animate-slideDown">
-              <span className="text-2xl mt-1">💡</span>
-              <div>
-                <p className="font-bold text-amber-800 text-sm mb-1">Tip van de Ranger:</p>
-                <p className="text-amber-900 text-sm leading-relaxed">{aiSuggestion}</p>
+          <div className="relative mb-4">
+            <textarea
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                if (feedback) setFeedback(null);
+              }}
+              className="w-full h-44 p-5 rounded-2xl bg-slate-50 border-2 border-transparent focus:bg-white focus:border-blue-400 focus:ring-0 outline-none transition-all resize-none text-slate-700 font-medium placeholder:text-slate-300 shadow-inner"
+              placeholder="Schrijf hier jouw reflectie... Tip: gebruik het voorbeeld hierboven als inspiratie!"
+            />
+            {isAiLoading && (
+              <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] rounded-2xl flex items-center justify-center z-20">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+                  </div>
+                  <span className="text-xs font-black text-blue-600 uppercase tracking-widest">De Ranger leest mee...</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {feedback && (
+            <div className={`mb-6 p-5 rounded-2xl border-l-4 animate-slideDown flex gap-4 ${
+              feedback.isOffline ? 'bg-amber-50 border-amber-400' : 'bg-blue-50 border-blue-400'
+            }`}>
+              <div className="flex-shrink-0 w-12 h-12 bg-white rounded-full shadow-sm flex items-center justify-center text-2xl border border-slate-50">
+                {feedback.isOffline ? '🛩️' : '🤠'}
+              </div>
+              <div className="flex-1">
+                <div className="flex justify-between items-center mb-1">
+                  <span className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${
+                    feedback.isOffline ? 'text-amber-600' : 'text-blue-600'
+                  }`}>
+                    {feedback.isOffline ? 'Offline Ranger Tip' : 'AI Reflectie-Ranger'}
+                  </span>
+                </div>
+                <p className="text-slate-700 text-sm leading-relaxed italic">"{feedback.text}"</p>
               </div>
             </div>
           )}
 
-          <div className="mt-6 flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={handleGetHelp}
-              disabled={!draft.trim() || isAiLoading}
-              className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-md disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-            >
-              {isAiLoading ? <i className="fas fa-circle-notch animate-spin"></i> : <i className="fas fa-magic"></i>}
-              Help mij verbeteren
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={!draft.trim()}
-              className="flex-1 bg-emerald-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-md disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-            >
-              <i className="fas fa-paper-plane"></i> Opslaan
-            </button>
+          <div className="flex flex-col gap-4">
+            <div className="flex gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={`flex-1 p-3 rounded-xl border-2 border-dashed transition-all flex items-center justify-center gap-2 ${
+                  photo ? 'border-emerald-500 bg-emerald-50 text-emerald-600' : 'border-slate-200 text-slate-400 hover:border-blue-300 hover:text-blue-500'
+                }`}
+              >
+                <i className={`fas ${photo ? 'fa-check-circle' : 'fa-camera'}`}></i>
+                <span className="text-xs font-bold">{photo ? 'Foto staat klaar!' : 'Voeg een foto toe'}</span>
+              </button>
+            </div>
+            
+            <input type="file" ref={fileInputRef} onChange={handlePhotoUpload} accept="image/*" capture="environment" className="hidden" />
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleGetHelp}
+                disabled={!draft.trim() || isAiLoading || isSubmitting}
+                className="bg-slate-800 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-slate-900 disabled:opacity-30 transition-all flex items-center justify-center gap-2 text-sm uppercase tracking-widest"
+              >
+                <i className="fas fa-magic"></i>
+                Hulp
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!draft.trim() || isAiLoading || isSubmitting}
+                className="bg-blue-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-600 disabled:opacity-30 transition-all flex items-center justify-center gap-2 text-sm uppercase tracking-widest"
+              >
+                <i className="fas fa-save"></i>
+                Klaar!
+              </button>
+            </div>
           </div>
         </div>
+
+        {photo && (
+          <div className="mb-8 animate-scaleIn text-center">
+            <div className="rounded-3xl overflow-hidden shadow-xl border-4 border-white inline-block max-w-xs relative group">
+              <img src={photo} alt="Bewijs" className="w-full h-auto" />
+              <button onClick={() => setPhoto(null)} className="absolute top-2 right-2 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center shadow-lg">
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="max-w-4xl mx-auto p-4 animate-fadeIn">
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex justify-between items-center mb-10">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">Hallo {currentUser.name}!</h1>
-          <p className="text-slate-500">Wat heb je vandaag geleerd?</p>
+          <h1 className="text-4xl font-black text-slate-800 tracking-tight">Hoi {currentUser.name}! 👋</h1>
+          <p className="text-slate-400 font-bold uppercase text-xs tracking-widest mt-1">Waar heb je vandaag over geleerd?</p>
         </div>
-        <button onClick={onLogout} className="text-slate-400 hover:text-blue-600 font-bold flex items-center gap-2 transition-colors">
-          <i className="fas fa-sign-out-alt"></i> Wissel van leerling
+        <button onClick={onLogout} className="w-12 h-12 bg-white rounded-2xl shadow-sm text-slate-300 hover:text-red-500 transition-all flex items-center justify-center border border-slate-50 group">
+          <i className="fas fa-power-off group-hover:scale-110 transition-transform"></i>
         </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {goals.map((goal) => {
           const myReflections = goal.reflections.filter(r => r.userId === currentUser.id);
+          const hasReflections = myReflections.length > 0;
           return (
             <button
               key={goal.id}
               onClick={() => setSelectedGoal(goal)}
-              className="group bg-white p-6 rounded-2xl shadow-md border-2 border-transparent hover:border-blue-400 transition-all text-left"
+              className={`group relative bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-50 hover:shadow-2xl hover:-translate-y-1.5 transition-all text-left overflow-hidden`}
             >
-              <div className="flex justify-between items-start mb-4">
-                <div className={`p-3 rounded-xl text-white ${SUBJECT_COLORS[goal.subject]}`}>
+              <div className={`absolute top-0 right-0 w-36 h-36 -mr-8 -mt-8 opacity-5 transition-transform group-hover:scale-110 group-hover:rotate-12 ${SUBJECT_COLORS[goal.subject]}`}>
+                <div className="flex items-center justify-center h-full text-8xl text-black">
                   {SUBJECT_ICONS[goal.subject]}
                 </div>
-                <span className="bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full font-bold">
-                  {myReflections.length} reflecties
-                </span>
               </div>
-              <h3 className="text-xl font-bold text-slate-800 mb-1 group-hover:text-blue-600 transition-colors">
+
+              <div className="flex items-center gap-3 mb-5">
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white text-2xl shadow-xl ${SUBJECT_COLORS[goal.subject]}`}>
+                  {SUBJECT_ICONS[goal.subject]}
+                </div>
+                {hasReflections && (
+                  <div className="bg-emerald-50 text-emerald-600 text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest border border-emerald-100">
+                    <i className="fas fa-check-circle mr-1"></i> Afgerond
+                  </div>
+                )}
+              </div>
+              
+              <h3 className="text-xl font-black text-slate-800 mb-2 group-hover:text-blue-600 transition-colors leading-tight">
                 {goal.title}
               </h3>
-              <p className="text-slate-500 line-clamp-2 text-sm italic">{goal.description}</p>
+              <p className="text-slate-400 text-sm italic line-clamp-2 leading-relaxed font-medium">{goal.description}</p>
+              
+              <div className="mt-8 flex items-center justify-between">
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
+                  {myReflections.length} reflecties
+                </span>
+                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-300 group-hover:bg-blue-500 group-hover:text-white transition-all">
+                  <i className="fas fa-chevron-right"></i>
+                </div>
+              </div>
             </button>
           );
         })}
