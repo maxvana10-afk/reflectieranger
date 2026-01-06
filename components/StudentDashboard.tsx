@@ -8,11 +8,18 @@ import { getAIFeedback, getMasteryGuidance, MasteryGuidanceResponse } from '../s
 interface Props {
   currentUser: User;
   goals: LearningGoal[];
-  onAddReflection: (goalId: string, content: string, masteryLevel: number, photoBase64?: string) => void;
+  onAddReflection: (goalId: string, content: string, masteryLevel: number, photoBase64?: string) => Promise<void>;
   onLogout: () => void;
+  onResetClassroom: () => void;
 }
 
-export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddReflection, onLogout }) => {
+export const StudentDashboard: React.FC<Props> = ({ 
+  currentUser, 
+  goals, 
+  onAddReflection, 
+  onLogout,
+  onResetClassroom
+}) => {
   const [selectedGoal, setSelectedGoal] = useState<LearningGoal | null>(null);
   const [draft, setDraft] = useState('');
   const [masteryLevel, setMasteryLevel] = useState<number>(3);
@@ -156,7 +163,6 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
             ))}
           </div>
 
-          {/* AI Mastery Guidance Section */}
           <div className="mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-100 animate-fadeIn min-h-[100px] flex flex-col justify-center">
             {currentGuidance ? (
               <div className="space-y-3">
@@ -278,13 +284,17 @@ export const StudentDashboard: React.FC<Props> = ({ currentUser, goals, onAddRef
 
   return (
     <div className="max-w-4xl mx-auto p-4 animate-fadeIn">
-      <div className="flex justify-between items-center mb-10">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
         <div>
           <h1 className="text-4xl font-black text-slate-800 tracking-tight">Hoi {currentUser.name}! 👋</h1>
           <p className="text-slate-400 font-bold uppercase text-xs tracking-widest mt-1">Waar heb je vandaag over geleerd?</p>
         </div>
-        <button onClick={onLogout} className="w-12 h-12 bg-white rounded-2xl shadow-sm text-slate-300 hover:text-red-500 transition-all flex items-center justify-center border border-slate-50 group">
-          <i className="fas fa-power-off group-hover:scale-110 transition-transform"></i>
+        <button 
+          onClick={onLogout} 
+          className="flex items-center gap-3 px-6 py-3 bg-red-50 text-red-600 rounded-2xl shadow-sm border border-red-100 hover:bg-red-100 transition-all group w-full sm:w-auto justify-center"
+        >
+          <i className="fas fa-door-open group-hover:scale-110 transition-transform"></i>
+          <span className="font-black uppercase text-xs tracking-widest">Klaar voor vandaag</span>
         </button>
       </div>
 

@@ -45,8 +45,6 @@ export const databaseService = {
     const queue = databaseService.getQueue();
     if (queue.length === 0) return;
 
-    // Voor deze demo verwerken we de wachtrij door de staat te verversen
-    // In een echte app zouden we granulaire API calls doen
     const classroomId = queue[0].classroomId;
     const currentState = await databaseService.getFullState(classroomId);
     
@@ -55,7 +53,6 @@ export const databaseService = {
       if (item.type === 'REFLECTION') {
         const goal = currentState.goals.find(g => g.id === item.payload.goalId);
         if (goal) {
-          // Voorkom dubbele reflecties
           if (!goal.reflections.some(r => r.id === item.payload.reflection.id)) {
             goal.reflections.push(item.payload.reflection);
             updated = true;
@@ -108,11 +105,11 @@ export const databaseService = {
   saveFullState: async (classroomId: string, state: AppState) => {
     try {
       state.lastUpdated = Date.now();
+      localStorage.setItem(`cache_${classroomId}`, JSON.stringify(state));
       await fetch(`${KV_BASE}/${classroomId}`, {
         method: 'POST',
         body: JSON.stringify(state)
       });
-      localStorage.setItem(`cache_${classroomId}`, JSON.stringify(state));
     } catch (e) {
       console.error("Save failed", e);
     }
@@ -131,6 +128,27 @@ export const databaseService = {
     return newUser;
   },
 
+  updateUser: async (classroomId: string, userId: string, newName: string): Promise<void> => {
+    const state = await databaseService.getFullState(classroomId);
+    state.users = state.users.map(u => u.id === userId ? { ...u, name: newName } : u);
+    await databaseService.saveFullState(classroomId, state);
+  },
+
+  deleteUser: async (classroomId: string, userId: string): Promise<void> => {
+    // 1. Update direct de lokale cache (synchroon)
+    const cache = localStorage.getItem(`cache_${classroomId}`);
+    if (cache) {
+      const state = JSON.parse(cache);
+      state.users = state.users.filter((u: any) => u.id !== userId);
+      localStorage.setItem(`cache_${classroomId}`, JSON.stringify(state));
+    }
+    
+    // 2. Start de cloud-sync
+    const state = await databaseService.getFullState(classroomId);
+    state.users = state.users.filter(u => u.id !== userId);
+    await databaseService.saveFullState(classroomId, state);
+  },
+
   createGoal: async (classroomId: string, goal: { subject: Subject; title: string; description: string }): Promise<LearningGoal> => {
     const newGoal: LearningGoal = {
       id: Date.now().toString(),
@@ -143,6 +161,27 @@ export const databaseService = {
     state.goals.push(newGoal);
     await databaseService.saveFullState(classroomId, state);
     return newGoal;
+  },
+
+  updateGoal: async (classroomId: string, goalId: string, updates: Partial<Omit<LearningGoal, 'id' | 'reflections'>>): Promise<void> => {
+    const state = await databaseService.getFullState(classroomId);
+    state.goals = state.goals.map(g => g.id === goalId ? { ...g, ...updates } : g);
+    await databaseService.saveFullState(classroomId, state);
+  },
+
+  deleteGoal: async (classroomId: string, goalId: string): Promise<void> => {
+    // 1. Update direct de lokale cache (synchroon)
+    const cache = localStorage.getItem(`cache_${classroomId}`);
+    if (cache) {
+      const state = JSON.parse(cache);
+      state.goals = state.goals.filter((g: any) => g.id !== goalId);
+      localStorage.setItem(`cache_${classroomId}`, JSON.stringify(state));
+    }
+
+    // 2. Start de cloud-sync
+    const state = await databaseService.getFullState(classroomId);
+    state.goals = state.goals.filter(g => g.id !== goalId);
+    await databaseService.saveFullState(classroomId, state);
   },
 
   fetchGoals: async (classroomId: string): Promise<LearningGoal[]> => {
